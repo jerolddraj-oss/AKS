@@ -1,0 +1,51 @@
+pipeline {
+    agent any
+
+    environment {
+        ACR_NAME = "jdacr12345"
+        IMAGE_NAME = "jdapp"
+        RG = "jd-aks-rg"
+        AKS = "jd-aks-cluster"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git 'https://github.com/your-repo.git'
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                dir('terraform') {
+                    sh 'terraform init'
+                    sh 'terraform apply -auto-approve'
+                }
+            }
+        }
+
+        stage('Build Image') {
+            steps {
+                dir('app') {
+                    sh 'docker build -t $ACR_NAME.azurecr.io/$IMAGE_NAME:latest .'
+                }
+            }
+        }
+
+        stage('Push Image') {
+            steps {
+                sh 'az acr login --name $ACR_NAME'
+                sh 'docker push $ACR_NAME.azurecr.io/$IMAGE_NAME:latest'
+            }
+        }
+
+        stage('Deploy to AKS') {
+            steps {
+                sh 'az aks get-credentials --resource-group $RG --name $AKS --overwrite-existing'
+                sh 'kubectl apply -f k8s/deployment.yaml'
+                sh 'kubectl apply -f k8s/service.yaml'
+            }
+        }
+    }
+}
