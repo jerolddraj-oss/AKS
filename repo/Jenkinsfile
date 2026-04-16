@@ -1,5 +1,5 @@
 pipeline {
-    agent any
+    agent windows-agent-1
 
     environment {
         ACR_NAME = "jdacr12345"
