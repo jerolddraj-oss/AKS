@@ -1,6 +1,14 @@
 pipeline {
     agent { label 'windows-agent-1' }
 
+    parameters {
+        choice(
+            name: 'ACTION',
+            choices: ['plan', 'apply', 'destroy'],
+            description: 'Select Terraform Action'
+        )
+    }
+
     environment {
         TF_DIR = "repo/terraform"
         ACR_NAME = "jdacr12345"
@@ -18,7 +26,6 @@ pipeline {
             }
         }
 
-        // 🔍 Debug (VERY IMPORTANT)
         stage('Debug Files') {
             steps {
                 bat 'echo ===== TF FILES ====='
@@ -26,7 +33,7 @@ pipeline {
             }
         }
 
-        // 🔐 Azure Login (Service Principal)
+        // 🔐 Azure Login
         stage('Azure Login') {
             steps {
                 withCredentials([
@@ -54,18 +61,58 @@ pipeline {
             }
         }
 
-        // 🏗️ Terraform Apply (AKS + ACR)
-        stage('Terraform Apply') {
+        // 🔧 Terraform Init
+        stage('Terraform Init') {
             steps {
                 dir("${TF_DIR}") {
                     bat 'terraform init'
-                    bat 'terraform apply -auto-approve'
                 }
             }
         }
 
-        // 🐳 Build Docker Image
+        // 📊 Terraform Plan
+        stage('Terraform Plan') {
+            when {
+                expression { params.ACTION == 'plan' || params.ACTION == 'apply' }
+            }
+            steps {
+                dir("${TF_DIR}") {
+                    bat 'terraform plan -out=tfplan'
+                }
+            }
+        }
+
+        // 🚀 Terraform Apply
+        stage('Terraform Apply') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
+            steps {
+                input message: 'Approve APPLY?', ok: 'Yes'
+                dir("${TF_DIR}") {
+                    bat 'terraform apply -auto-approve tfplan'
+                }
+            }
+        }
+
+        // 💣 Terraform Destroy
+        stage('Terraform Destroy') {
+            when {
+                expression { params.ACTION == 'destroy' }
+            }
+            steps {
+                input message: '⚠️ Confirm DESTROY?', ok: 'Destroy'
+                dir("${TF_DIR}") {
+                    bat 'terraform destroy -auto-approve'
+                }
+            }
+        }
+
+        // 🐳 Build (only if APPLY)
         stage('Build Image') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
             steps {
                 dir('repo/app') {
                     bat "docker build -t %ACR_NAME%.azurecr.io/%IMAGE_NAME%:latest ."
@@ -73,16 +120,22 @@ pipeline {
             }
         }
 
-        // 📦 Push to ACR
+        // 📦 Push (only if APPLY)
         stage('Push Image') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
             steps {
                 bat "az acr login --name %ACR_NAME%"
                 bat "docker push %ACR_NAME%.azurecr.io/%IMAGE_NAME%:latest"
             }
         }
 
-        // 🚀 Deploy to AKS
+        // 🚀 Deploy (only if APPLY)
         stage('Deploy to AKS') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
             steps {
                 bat "az aks get-credentials --resource-group %RG% --name %AKS% --overwrite-existing"
                 bat "kubectl apply -f repo/k8s/deployment.yaml"
@@ -93,10 +146,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment completed successfully"
+            echo "✅ Action ${params.ACTION} completed successfully"
         }
         failure {
-            echo "❌ Pipeline failed"
+            echo "❌ Action ${params.ACTION} failed"
         }
     }
 }
